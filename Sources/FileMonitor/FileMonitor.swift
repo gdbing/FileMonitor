@@ -20,6 +20,23 @@ public class FileMonitor {
         self.startMonitoring()
     }
 
+    public convenience init?(bookmark: Data, changeHandler: @escaping () -> Void) {
+        do {
+            var isStale = false
+            let url = try Foundation.URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale)
+
+            if isStale {
+                print("Warning: The bookmark data was stale and has been resolved to a new location.")
+            }
+
+            self.init(url: url, changeHandler: changeHandler)
+
+        } catch {
+            print("ERROR: Failed to initialize FileMonitor from bookmark: \(error)")
+            return nil
+        }
+    }
+
     public func startMonitoring() {
         guard source == nil && monitoredFileDescriptor == -1 else {
             print("ERROR: FileMonitor already has an open file")
