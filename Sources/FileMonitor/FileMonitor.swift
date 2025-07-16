@@ -1,10 +1,10 @@
 import Foundation
 
-// TODO: 
-//   - fix handling of rename
+// TODO:
 //   - handle expired security scope ?
 
 public class FileMonitor {
+    private var bookmark: Data?
     private var monitoredFileDescriptor: CInt = -1
     private let fileMonitorQueue = DispatchQueue(label: "FileMonitorQueue", attributes: .concurrent)
     private var source: DispatchSourceFileSystemObject?
@@ -31,6 +31,14 @@ public class FileMonitor {
             return
         }
 
+        if self.bookmark == nil {
+            do {
+                self.bookmark = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+            } catch {
+                print("ERROR: Failed to create bookmark data: \(error)")
+            }
+        }
+
         monitoredFileDescriptor = open(url.path, O_EVTONLY)
         url.stopAccessingSecurityScopedResource()
 
@@ -47,13 +55,24 @@ public class FileMonitor {
 
             switch(event) {
             case .rename:
-                var pathBuffer = [CChar](repeating: 0, count: Int(PATH_MAX))
-                let result = fcntl(strongSelf.monitoredFileDescriptor, F_GETPATH, &pathBuffer)
+                guard let oldBookmark = strongSelf.bookmark else {
+                    print("ERROR: File was renamed, but no bookmark data is available.")
+                    break
+                }
 
-                if result >= 0 {
-                    let currentPath = String(cString: pathBuffer)
-                    strongSelf.url = Foundation.URL(filePath:currentPath)
-                    // TODO: this doesn't work, because we don't have the right to call startAccessingSecurityScopedResource on the new URL. Maybe if we save a bookmark? idgi
+                do {
+                    var isStale = false
+                    let newURL = try Foundation.URL(resolvingBookmarkData: oldBookmark, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale)
+                    cleanup(strongSelf)
+                    strongSelf.url = newURL
+                    if isStale {
+                        print("Bookmark was stale, creating a new one.")
+                        strongSelf.bookmark = try newURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+                    }
+                    strongSelf.startMonitoring()
+                } catch {
+                    print("ERROR: Could not resolve bookmark after rename: \(error)")
+                    cleanup(strongSelf)
                 }
                 break
             case [.link, .delete]:
@@ -77,6 +96,7 @@ public class FileMonitor {
 
     public func stopMonitoring() {
         source?.cancel()
+        self.bookmark = nil
     }
 
     private var writingTask: Task<(), any Error>?
